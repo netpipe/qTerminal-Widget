@@ -57,33 +57,47 @@ protected:
                 p.drawText(x * charWidth, (y + 1) * charHeight - baseline, cell.ch);
             }
         }
+
+        if (cursorVisible) {
+            p.setPen(Qt::white);
+            p.fillRect(QRect(cursorX * charWidth, cursorY * charHeight, charWidth, charHeight), Qt::white);
+            if (cursorY < rows && cursorX < cols) {
+                p.setPen(Qt::black);
+                p.drawText(cursorX * charWidth, (cursorY + 1) * charHeight - baseline, screen[cursorY][cursorX].ch);
+            }
+        }
     }
+
 
     void keyPressEvent(QKeyEvent *event) override {
         QByteArray input;
 
-        if (event->modifiers() & Qt::ControlModifier) {
-            char c = event->key();
-            if (c >= '@' && c <= '_') input.append(c - '@');
-        } else if (event->key() == Qt::Key_Backspace) {
-            input = "\x7f";
-        } else if (event->key() == Qt::Key_Return) {
-            input = "\r";
-        } else if (event->key() == Qt::Key_Left) {
-            input = "\x1B[D";
-        } else if (event->key() == Qt::Key_Right) {
-            input = "\x1B[C";
-        } else if (event->key() == Qt::Key_Up) {
-            input = "\x1B[A";
-        } else if (event->key() == Qt::Key_Down) {
-            input = "\x1B[B";
+        if (event->modifiers() & Qt::ControlModifier && event->key() >= Qt::Key_A && event->key() <= Qt::Key_Z) {
+            input.append(char(event->key() - Qt::Key_A + 1));  // Ctrl+A → \x01
         } else {
-            input = event->text().toLocal8Bit();
+            switch(event->key()) {
+                case Qt::Key_Backspace: input = "\x7f"; break;
+                case Qt::Key_Delete:    input = "\x1B[3~"; break;
+                case Qt::Key_Return:
+                case Qt::Key_Enter:     input = "\r"; break;
+                case Qt::Key_Tab:       input = "\t"; break;
+                case Qt::Key_Escape:    input = "\x1B"; break;
+                case Qt::Key_Left:      input = "\x1B[D"; break;
+                case Qt::Key_Right:     input = "\x1B[C"; break;
+                case Qt::Key_Up:        input = "\x1B[A"; break;
+                case Qt::Key_Down:      input = "\x1B[B"; break;
+                default:
+                    input = event->text().toUtf8();
+                    break;
+            }
         }
 
         if (!input.isEmpty() && masterFd >= 0)
             write(masterFd, input.constData(), input.length());
     }
+
+
+
 
     void mousePressEvent(QMouseEvent *event) override {
         int x = event->x() / charWidth;
@@ -125,14 +139,18 @@ private:
     int cursorX = 0, cursorY = 0;
     int charWidth = 10, charHeight = 18, baseline = 4;
     QColor currentColor = Qt::white;
+    bool cursorVisible = true;
+    QTimer *cursorTimer;
 
     void initFont() {
         QFont f("Courier", 12);
         setFont(f);
         QFontMetrics fm(f);
         charWidth = fm.horizontalAdvance('M');
-        charHeight = fm.height();
-        baseline = fm.descent();
+    //    charHeight = fm.height();
+        baseline = fm.ascent();
+        charHeight = fm.height() + 2; // slight padding
+
     }
 
     void startPTY() {
@@ -140,7 +158,8 @@ private:
         pid = forkpty(&masterFd, nullptr, nullptr, &ws);
         if (pid == 0) {
             setenv("TERM", "xterm-256color", 1);
-            execlp("nano", "nano", nullptr);
+           // execlp("nano", "nano", nullptr);
+            execlp("bash", "bash", nullptr);
             perror("exec failed");
             _exit(1);
         }
@@ -151,6 +170,13 @@ private:
         QTimer *timer = new QTimer(this);
         connect(timer, &QTimer::timeout, this, &TerminalWidget::readFromPty);
         timer->start(10);
+        cursorTimer = new QTimer(this);
+        connect(cursorTimer, &QTimer::timeout, this, [this]() {
+            cursorVisible = !cursorVisible;
+            update();
+        });
+        cursorTimer->start(500); // blink every 500ms
+
     }
 
     void readFromPty() {
